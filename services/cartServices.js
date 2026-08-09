@@ -75,9 +75,7 @@ exports.getLoggedUserCart = asyncHandler(async (req, res, next) => {
   const cart = await Cart.findOne({ user: req.user._id });
 
   if (!cart) {
-    return next(
-      new endpointError(`There is no cart for this user id : ${req.user._id}`, 404)
-    );
+    return next(new endpointError("Cart not found", 404));
   }
 
   res.status(200).json({
@@ -125,7 +123,7 @@ exports.updateCartItemQuantity = asyncHandler(async (req, res, next) => {
 
   const cart = await Cart.findOne({ user: req.user._id });
   if (!cart) {
-    return next(new endpointError(`there is no cart for user ${req.user._id}`, 404));
+    return next(new endpointError("Cart not found", 404));
   }
 
   const itemIndex = cart.cartItems.findIndex(
