@@ -11,6 +11,9 @@ const Cart = require("../models/cartModel");
 const Order = require("../models/orderModel");
 const { createShipment, getTrackingInfo, updateOrderStatus } = require("./deliveryService");
 const { generateInvoice } = require("./invoiceService");
+// M2: Transition rules + stock re-adjustment for the admin order edit flow.
+const { isAllowedTransition } = require("../utils/orderStatusTransitions");
+const { applyQuantityDeltas } = require("../utils/stockAdjustment");
 
 // M3: Single source of truth for the flat shipping fee (persisted on orders so
 // admin/confirmation subtotals compute as totalOrderPrice - shippingPrice).
@@ -754,6 +757,150 @@ const confirmCardOrder = asyncHandler(async (req, res, next) => {
   });
 });
 
+// M2: Admin order edit — single source of truth for the View/Edit dialog.
+// Cash/COD orders: fully editable (status, address, item qty+color, shipping
+// price, tracking number). Card orders: read-only except delivery-status
+// progression (Status tab); any data edit is rejected with 403.
+// Strict whitelist is enforced by updateOrderValidator (unknown keys → 400);
+// transition legality (isAllowedTransition) is enforced here.
+const updateOrder = asyncHandler(async (req, res, next) => {
+  const order = await _findById(req.params.id);
+
+  if (!order) {
+    return next(
+      new ApiError(`There is no such order with id: ${req.params.id}`, 404)
+    );
+  }
+
+  const {
+    deliveryStatus,
+    statusNote,
+    shippingAddress,
+    cartItems,
+    shippingPrice,
+    trackingNumber,
+  } = req.body;
+
+  // Card orders are data read-only: only deliveryStatus (+ statusNote) may be
+  // sent. The validator already rejects unknown top-level keys with 400; this
+  // guard turns any *known-but-forbidden* data edit on a card order (address,
+  // items, shippingPrice, trackingNumber) into a clear 403.
+  const isStatusOnlyBody = Object.keys(req.body).every((key) =>
+    ["deliveryStatus", "statusNote"].includes(key)
+  );
+  if (order.paymentMethodType === "card" && !isStatusOnlyBody) {
+    return next(
+      new ApiError(
+        "Card orders are read-only. Only the delivery status can be updated.",
+        403
+      )
+    );
+  }
+
+  // --- delivery status progression (cash + card share the Status tab) ---
+  if (deliveryStatus !== undefined) {
+    // Same-state moves and terminal states (cancelled/failed/returned/
+    // completed) have no outgoing transitions → isAllowedTransition is false.
+    if (!isAllowedTransition(order.deliveryStatus, deliveryStatus)) {
+      return next(
+        new ApiError(
+          `Cannot change delivery status from "${order.deliveryStatus}" to "${deliveryStatus}"`,
+          400
+        )
+      );
+    }
+
+    order.deliveryStatus = deliveryStatus;
+    order.statusHistory.push({
+      status: deliveryStatus,
+      note: statusNote || "Order updated by seller",
+      updatedBy: "seller",
+    });
+
+    if (req.user) {
+      await logOrderActivity("update", order, req.user, {
+        changes: `status -> ${deliveryStatus}`,
+      });
+    }
+  }
+
+  // --- cash-only editable fields (card orders stay untouched here) ---
+  if (order.paymentMethodType !== "card") {
+    if (shippingAddress !== undefined) {
+      // Whitelist sub-keys (mirrors updateOrderValidator) — never trust the
+      // raw object wholesale.
+      order.shippingAddress = {
+        wilaya: shippingAddress.wilaya,
+        dayra: shippingAddress.dayra,
+        baladiya: shippingAddress.baladiya,
+        phone: shippingAddress.phone,
+      };
+    }
+
+    if (cartItems !== undefined) {
+      // Resolve incoming changes against the order's current items (matched by
+      // product id). Stock is validated/applied BEFORE mutating the order's
+      // quantities, so applyQuantityDeltas computes deltas from the original
+      // quantities. On shortage we abort with 400 and nothing is persisted.
+      const matchedChanges = [];
+      for (const change of cartItems) {
+        const item = order.cartItems.find(
+          (i) => String(i.product?._id || i.product) === String(change._id)
+        );
+        if (item) matchedChanges.push(change);
+      }
+
+      if (matchedChanges.length > 0) {
+        const stockResult = await applyQuantityDeltas(
+          order,
+          matchedChanges,
+          Product
+        );
+        if (!stockResult.ok) {
+          return next(new ApiError(stockResult.reason, 400));
+        }
+      }
+
+      // Apply qty/color to the matching cart items (price stays frozen).
+      for (const change of cartItems) {
+        const item = order.cartItems.find(
+          (i) => String(i.product?._id || i.product) === String(change._id)
+        );
+        if (!item) continue;
+        if (change.quantity !== undefined) item.quantity = change.quantity;
+        if (change.color !== undefined) item.color = change.color;
+      }
+    }
+
+    if (shippingPrice !== undefined) {
+      order.shippingPrice = shippingPrice;
+    }
+
+    if (trackingNumber !== undefined) {
+      order.trackingNumber = trackingNumber;
+    }
+  }
+
+  // --- always recompute totals from frozen per-item prices ---
+  const subtotal = order.cartItems.reduce(
+    (sum, item) => sum + (item.quantity || 0) * (item.price || 0),
+    0
+  );
+  order.totalOrderPrice =
+    Math.round(
+      (subtotal + (order.shippingPrice || 0) + (order.taxPrice || 0)) * 100
+    ) / 100;
+
+  // COD amount mirrors the total for cash orders (derived field).
+  if (order.paymentMethodType === "cash") {
+    order.codAmount = order.totalOrderPrice;
+  }
+
+  const updatedOrder = await order.save();
+
+  res.status(200).json({ status: "success", data: updatedOrder });
+});
+
 const downloadInvoice = asyncHandler(async (req, res, next) => {
   const order = await _findById(req.params.id)
     .populate("user", "name email phone")
@@ -805,5 +952,6 @@ module.exports = {
   simulateDelivery,
   cancelOrder,
   confirmCardOrder,
+  updateOrder,
   downloadInvoice
 };

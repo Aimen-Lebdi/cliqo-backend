@@ -17,7 +17,10 @@ const {
   confirmCardOrder,
   getOrderBySession,
   downloadInvoice,
+  updateOrder, // M2: admin order edit (View/Edit dialog)
 } = require("../services/orderServices");
+
+const { updateOrderValidator } = require("../utils/validators/orderValidators");
 
 const authService = require("../services/authServices");
 
@@ -71,6 +74,17 @@ router.get(
   authService.allowTo("user", "admin"),
   restrictOrderAccess,
   findSpecificOrder
+);
+
+// M2: Admin order edit (View/Edit dialog). Strict whitelist + shape validation
+// via updateOrderValidator; transition legality + card-order lock enforced in
+// the service. PUT /:id does not collide with /myOrders or /session/:sessionId.
+router.put(
+  "/:id",
+  authService.protectRoute,
+  authService.allowTo("admin"),
+  updateOrderValidator,
+  updateOrder
 );
 
 // COD Workflow endpoints (admin only)
