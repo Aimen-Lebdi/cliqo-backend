@@ -9,11 +9,20 @@ const User = require("../models/userModel");
 const Product = require("../models/productModel");
 const Cart = require("../models/cartModel");
 const Order = require("../models/orderModel");
-const { createShipment, getTrackingInfo, updateOrderStatus } = require("./deliveryService");
+const {
+  createShipment,
+  getTrackingInfo,
+  updateOrderStatus,
+  cancelParcel,
+  startSimulation,
+} = require("./deliveryService");
 const { generateInvoice } = require("./invoiceService");
 // M2: Transition rules + stock re-adjustment for the admin order edit flow.
 const { isAllowedTransition } = require("../utils/orderStatusTransitions");
 const { applyQuantityDeltas } = require("../utils/stockAdjustment");
+// M3: Shared recovery (restock + Stripe refund) — also used by the webhook
+// `returned` flow in deliveryService.
+const { restockOrderItems, refundCardOrder } = require("../utils/orderRecovery");
 
 // M3: Single source of truth for the flat shipping fee (persisted on orders so
 // admin/confirmation subtotals compute as totalOrderPrice - shippingPrice).
@@ -436,6 +445,18 @@ const webhookCheckout = asyncHandler(async (req, res, next) => {
   res.status(200).json({ received: true });
 });
 
+// M3: Confirm = create parcel + auto-simulate (the mock drives status via
+// webhooks). Locked decisions:
+// - Precondition: `pending`, OR a retry of a failed confirm (`confirmed` with
+//   no tracking number), OR a retry of a partial failure (`shipped` with a
+//   tracking number whose simulation never started).
+// - First confirm: persist `confirmed`, then createShipment (flips the order to
+//   `shipped` + trackingNumber), then startSimulation (random scenario).
+// - Retry (trackingNumber exists): skip parcel creation (idempotent, decision
+//   7) and just restart the simulation.
+// - On ANY failure: revert to `confirmed` only when no parcel was created
+//   (decision 3); keep shipped + tracking on partial failure so the retry
+//   restarts just the sim. Always return 400 so the dialog stays open.
 const confirmOrder = asyncHandler(async (req, res, next) => {
   const order = await _findById(req.params.id);
 
@@ -445,30 +466,72 @@ const confirmOrder = asyncHandler(async (req, res, next) => {
     );
   }
 
-  if (order.deliveryStatus !== "pending") {
+  const canConfirm =
+    order.deliveryStatus === "pending" ||
+    (order.deliveryStatus === "confirmed" && !order.trackingNumber) ||
+    (order.deliveryStatus === "shipped" && order.trackingNumber);
+
+  if (!canConfirm) {
     return next(
-      new ApiError(`Order already confirmed or in different state`, 400)
+      new ApiError(
+        `Order cannot be confirmed. Current status: ${order.deliveryStatus}.`,
+        400
+      )
     );
   }
 
-  order.deliveryStatus = "confirmed";
-  order.statusHistory.push({
-    status: "confirmed",
-    note: "Order confirmed by seller",
-    updatedBy: "seller",
-  });
+  // First confirmation: persist `confirmed` (the point of no return for the
+  // "mock down at confirm" failure mode), then create the parcel.
+  if (!order.trackingNumber) {
+    order.deliveryStatus = "confirmed";
+    order.statusHistory.push({
+      status: "confirmed",
+      note: "Order confirmed by seller",
+      updatedBy: "seller",
+    });
+    await order.save();
 
-  await order.save();
+    try {
+      await createShipment(req.params.id);
+    } catch (error) {
+      // No parcel was created → keep the order at `confirmed` so the dialog
+      // can retry (decision 3). createShipment is idempotent on retry.
+      const fresh = await _findById(req.params.id);
+      if (fresh && !fresh.trackingNumber) {
+        fresh.deliveryStatus = "confirmed";
+        await fresh.save();
+      }
+      return next(new ApiError(error.message, 400));
+    }
+  }
+
+  // Auto-simulate with a random scenario (chosen backend-side in
+  // startSimulation). Partial failure: if the parcel exists, keep shipped +
+  // tracking (the retry restarts only the sim); otherwise revert to confirmed.
+  try {
+    await startSimulation(req.params.id);
+  } catch (error) {
+    const fresh = await _findById(req.params.id);
+    if (fresh && !fresh.trackingNumber) {
+      fresh.deliveryStatus = "confirmed";
+      await fresh.save();
+    }
+    return next(new ApiError(error.message, 400));
+  }
 
   // Log activity
   if (req.user) {
     await logOrderActivity("confirm", order, req.user);
   }
 
+  const confirmedOrder = await _findById(req.params.id);
+
   res.status(200).json({
     status: "success",
-    message: "Order confirmed. Ready to ship.",
-    data: order,
+    message:
+      "Order confirmed, parcel created and delivery simulation started.",
+    data: confirmedOrder,
+    trackingNumber: confirmedOrder.trackingNumber,
   });
 });
 
@@ -606,78 +669,23 @@ const cancelOrder = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // M4: Restore product stock and decrement sold count (floored at 0).
-  if (order.cartItems && order.cartItems.length > 0) {
-    for (const item of order.cartItems) {
-      await Product.updateOne(
-        { _id: item.product },
-        [
-          {
-            $set: {
-              quantity: { $add: ["$quantity", item.quantity] },
-              sold: { $max: [{ $subtract: ["$sold", item.quantity] }, 0] },
-            },
-          },
-        ]
-      );
-    }
-  }
+  // M3: Best-effort cancellation of the delivery parcel (if any). Never blocks
+  // the cancel — failures are logged, not thrown (decision 5 / risk 3).
+  await cancelParcel(order.trackingNumber);
 
-  // M4: For card orders with captured/authorized payment, issue a real Stripe
-  // refund. Only mark paymentStatus "refunded" when the refund actually
-  // succeeded — never mark refunded when there is no PaymentIntent or the
-  // refund API call failed (that would silently lose money).
-  const shouldRefund =
-    order.paymentMethodType === "card" &&
-    ["authorized", "confirmed"].includes(order.paymentStatus) &&
-    order.isPaid;
+  const updatedBy = req.user?.role === "admin" ? "seller" : "customer";
 
-  if (shouldRefund) {
-    const updatedBy = req.user?.role === "admin" ? "seller" : "customer";
-
-    if (!order.stripePaymentIntentId) {
-      console.warn(
-        `Cannot refund order ${order._id}: no stripePaymentIntentId. Payment NOT marked as refunded.`
-      );
-      order.statusHistory.push({
-        status: "refund_failed",
-        note: "Refund could not be issued: missing Stripe PaymentIntent ID. Payment left unchanged.",
-        updatedBy,
-      });
-    } else {
-      try {
-        const refundResult = await stripe.refunds.create({
-          payment_intent: order.stripePaymentIntentId,
-        });
-        console.log(
-          `↩️ Stripe refund created for order ${order._id}: ${refundResult.id}`
-        );
-        order.paymentStatus = "refunded";
-        order.isPaid = false;
-        order.statusHistory.push({
-          status: "payment_refunded",
-          note: `Payment refunded via Stripe. Refund ID: ${refundResult.id}`,
-          updatedBy,
-        });
-      } catch (error) {
-        console.error(
-          `Failed to refund Stripe payment for order ${order._id}:`,
-          error.message
-        );
-        order.statusHistory.push({
-          status: "refund_failed",
-          note: `Refund failed: ${error.message}. Payment NOT marked as refunded.`,
-          updatedBy,
-        });
-      }
-    }
-  }
+  // M3: Reuse the shared recovery utils (M1) — identical restock/refund logic
+  // to the webhook `returned` flow (decision 9). Behavior unchanged from the
+  // previous inline implementation.
+  await restockOrderItems(order, Product);
+  await refundCardOrder(order, stripe, updatedBy);
 
   order.deliveryStatus = "cancelled";
   order.statusHistory.push({
     status: "cancelled",
     note: req.body.reason || "Order cancelled by user",
-    updatedBy: req.user?.role === "admin" ? "seller" : "customer",
+    updatedBy,
   });
 
   await order.save();
@@ -799,8 +807,34 @@ const updateOrder = asyncHandler(async (req, res, next) => {
 
   // --- delivery status progression (cash + card share the Status tab) ---
   if (deliveryStatus !== undefined) {
-    // Same-state moves and terminal states (cancelled/failed/returned/
-    // completed) have no outgoing transitions → isAllowedTransition is false.
+    // M3: Statuses owned by dedicated flows are rejected here:
+    // - `confirmed` / `cancelled` → use the confirm/cancel endpoints (they
+    //   create/cancel the delivery parcel and auto-simulate).
+    // - `failed` / `returned` → webhook-only (random simulation outcome).
+    const reservedTargets = ["confirmed", "cancelled", "failed", "returned"];
+    if (reservedTargets.includes(deliveryStatus)) {
+      return next(
+        new ApiError(
+          `Delivery status "${deliveryStatus}" cannot be set via order edit. Use the confirm/cancel endpoints.`,
+          400
+        )
+      );
+    }
+
+    // M3: `pending` / `confirmed` have NO status moves via updateOrder —
+    // moving them forward is the confirm endpoint's job.
+    if (["pending", "confirmed"].includes(order.deliveryStatus)) {
+      return next(
+        new ApiError(
+          `Cannot change delivery status from "${order.deliveryStatus}" via order edit. Use the confirm/cancel endpoints.`,
+          400
+        )
+      );
+    }
+
+    // Forward-chain moves from `shipped` onward only
+    // (shipped→in_transit→out_for_delivery→delivered→completed). Same-state
+    // moves and terminal states stay blocked by isAllowedTransition.
     if (!isAllowedTransition(order.deliveryStatus, deliveryStatus)) {
       return next(
         new ApiError(

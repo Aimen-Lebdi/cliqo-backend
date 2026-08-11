@@ -1,5 +1,9 @@
 const axios = require("axios");
 const Order = require("../models/orderModel");
+const Product = require("../models/productModel");
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
+// M2: Reused by the webhook-driven `returned` flow (restock + refund).
+const { restockOrderItems, refundCardOrder } = require("../utils/orderRecovery");
 
 // Configuration
 // M3: Fixed broken default URL (was .../api/api/v1/)
@@ -39,6 +43,20 @@ class DeliveryService {
 
       if (order.deliveryStatus !== "confirmed") {
         throw new Error("Order must be confirmed before shipping");
+      }
+
+      // M2: Idempotency — if a parcel was already created for this order (e.g.
+      // a retry after a failed confirm), don't POST a second one. Return the
+      // existing tracking number so callers (confirmOrder) skip creation and
+      // go straight to auto-simulate. The "must be confirmed" guard above is
+      // intentionally NOT relaxed.
+      if (order.trackingNumber) {
+        return {
+          success: true,
+          alreadyShipped: true,
+          trackingNumber: order.trackingNumber,
+          message: "Shipment already exists for this order",
+        };
       }
 
       // Prepare product list
@@ -85,6 +103,63 @@ class DeliveryService {
     } catch (error) {
       console.error("Error creating shipment:", error.message);
       throw new Error(`Failed to create shipment: ${error.message}`);
+    }
+  }
+
+  // Best-effort cancellation of a parcel in the delivery API (M2). Called by
+  // cancelOrder. Never throws — a mock/agency failure is logged and the order
+  // cancel proceeds regardless (best-effort, decision 5 / risk 3).
+  static async cancelParcel(trackingNumber) {
+    if (!trackingNumber) {
+      return;
+    }
+    try {
+      await axios.put(`${DELIVERY_API_URL}/parcels/${trackingNumber}/status`, {
+        status: "cancelled",
+      });
+      console.log(`🚫 Parcel ${trackingNumber} cancelled in delivery API`);
+    } catch (error) {
+      console.warn(
+        `⚠️ Failed to cancel parcel ${trackingNumber} in delivery API: ${error.message}`
+      );
+    }
+  }
+
+  // Start the delivery auto-simulation for an order (M2). Reads the order's
+  // tracking number and picks a RANDOM scenario backend-side (success/failed);
+  // the mock API then drives status via webhooks. Throws on failure so callers
+  // (confirmOrder) can revert/abort.
+  static async startSimulation(id) {
+    const order = await Order.findById(id);
+
+    if (!order) {
+      throw new Error("Order not found");
+    }
+
+    if (!order.trackingNumber) {
+      throw new Error("Order has no tracking number — cannot simulate");
+    }
+
+    // 50/50 random scenario. "failed" ends at `returned` (via webhook), which
+    // restocks + refunds (decision 9); anything else follows the success flow.
+    const scenario = Math.random() < 0.5 ? "failed" : "success";
+
+    try {
+      const response = await axios.post(
+        `${DELIVERY_API_URL}/parcels/${order.trackingNumber}/simulate`,
+        { speed: "fast", scenario }
+      );
+
+      if (response.data && response.data.success) {
+        return response.data;
+      }
+      throw new Error(
+        response.data?.message ||
+          "Delivery API did not confirm simulation start"
+      );
+    } catch (error) {
+      console.error("Error starting delivery simulation:", error.message);
+      throw new Error(`Failed to start delivery simulation: ${error.message}`);
     }
   }
 
@@ -142,6 +217,15 @@ class DeliveryService {
         note: deliveryData.note || `Delivery status: ${deliveryData.status}`,
         updatedBy: "delivery_agency",
       });
+
+      // M2: A `returned` parcel is treated like a cancellation (decision 9) —
+      // restore product stock and, for paid card orders, issue a Stripe refund
+      // BEFORE persisting. Restock/refund are best-effort: refund failures are
+      // recorded in statusHistory (refund_failed) without blocking the save.
+      if (mappedStatus === "returned") {
+        await restockOrderItems(order, Product);
+        await refundCardOrder(order, stripe, "delivery_agency");
+      }
 
       // If delivered, mark accordingly
       if (newStatus === "delivered") {
