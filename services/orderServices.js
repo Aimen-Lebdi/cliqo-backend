@@ -20,9 +20,13 @@ const { generateInvoice } = require("./invoiceService");
 // M2: Transition rules + stock re-adjustment for the admin order edit flow.
 const { isAllowedTransition } = require("../utils/orderStatusTransitions");
 const { applyQuantityDeltas } = require("../utils/stockAdjustment");
-// M3: Shared recovery (restock + Stripe refund) — also used by the webhook
-// `returned` flow in deliveryService.
-const { restockOrderItems, refundCardOrder } = require("../utils/orderRecovery");
+// M3: Shared recovery (restock + Stripe refund + cash payment closure) — also
+// used by the webhook `returned`/`failed` flow in deliveryService.
+const {
+  restockOrderItems,
+  refundCardOrder,
+  closeCashPayment,
+} = require("../utils/orderRecovery");
 
 // M3: Single source of truth for the flat shipping fee (persisted on orders so
 // admin/confirmation subtotals compute as totalOrderPrice - shippingPrice).
@@ -680,6 +684,9 @@ const cancelOrder = asyncHandler(async (req, res, next) => {
   // previous inline implementation.
   await restockOrderItems(order, Product);
   await refundCardOrder(order, stripe, updatedBy);
+  // Cash (COD) orders have no Stripe PaymentIntent to refund — close the
+  // payment (`cancelled`). Card orders keep the refund above.
+  closeCashPayment(order, updatedBy);
 
   order.deliveryStatus = "cancelled";
   order.statusHistory.push({
@@ -782,19 +789,18 @@ const updateOrder = asyncHandler(async (req, res, next) => {
 
   const {
     deliveryStatus,
-    statusNote,
     shippingAddress,
     cartItems,
     shippingPrice,
     trackingNumber,
   } = req.body;
 
-  // Card orders are data read-only: only deliveryStatus (+ statusNote) may be
-  // sent. The validator already rejects unknown top-level keys with 400; this
-  // guard turns any *known-but-forbidden* data edit on a card order (address,
-  // items, shippingPrice, trackingNumber) into a clear 403.
-  const isStatusOnlyBody = Object.keys(req.body).every((key) =>
-    ["deliveryStatus", "statusNote"].includes(key)
+  // Card orders are data read-only: only deliveryStatus may be sent. The
+  // validator already rejects unknown top-level keys with 400; this guard
+  // turns any *known-but-forbidden* data edit on a card order (address, items,
+  // shippingPrice, trackingNumber) into a clear 403.
+  const isStatusOnlyBody = Object.keys(req.body).every(
+    (key) => key === "deliveryStatus"
   );
   if (order.paymentMethodType === "card" && !isStatusOnlyBody) {
     return next(
@@ -847,7 +853,7 @@ const updateOrder = asyncHandler(async (req, res, next) => {
     order.deliveryStatus = deliveryStatus;
     order.statusHistory.push({
       status: deliveryStatus,
-      note: statusNote || "Order updated by seller",
+      note: "Order updated by seller",
       updatedBy: "seller",
     });
 

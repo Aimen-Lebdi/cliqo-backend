@@ -7,7 +7,6 @@ const { ORDER_STATUSES } = require("../orderStatusTransitions");
 // this list is rejected with 400 (strict unknown-key rejection).
 const ALLOWED_UPDATE_KEYS = [
   "deliveryStatus",
-  "statusNote",
   "shippingAddress",
   "cartItems",
   "shippingPrice",
@@ -42,13 +41,6 @@ const updateOrderValidator = [
         options: [ORDER_STATUSES],
         errorMessage: "Invalid delivery status",
       },
-    },
-    statusNote: {
-      optional: true,
-      isString: {
-        errorMessage: "statusNote must be a string",
-      },
-      trim: true,
     },
     shippingAddress: {
       optional: true,

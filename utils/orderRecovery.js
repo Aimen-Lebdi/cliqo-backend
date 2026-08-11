@@ -12,6 +12,10 @@
  *   when there is no PaymentIntent or the refund API call failed (that would
  *   silently lose money). Writes `refund_failed` / `payment_refunded` entries
  *   into `order.statusHistory`.
+ * - `closeCashPayment` closes the payment for cash (COD) orders that reached a
+ *   terminal dead-end (cancelled / returned / failed delivery): marks
+ *   paymentStatus "cancelled" + isPaid false and writes a `payment_cancelled`
+ *   history entry. Card orders use refundCardOrder instead.
  */
 
 /**
@@ -58,6 +62,37 @@ const restockOrderItems = async (order, Product) => {
  *   "seller", "customer", "system", "delivery_agency").
  * @returns {Promise<boolean>} true when a refund was actually issued.
  */
+/**
+ * Close the payment for a cash (COD) order that reached a terminal dead-end
+ * (cancelled / returned / failed delivery).
+ *
+ * Cash orders have no Stripe PaymentIntent to refund, so they are simply
+ * marked `cancelled` and `isPaid = false`. Only applies to cash orders — card
+ * orders go through refundCardOrder instead. Idempotent: a second call on an
+ * already-closed order is a no-op (no duplicate history entry).
+ *
+ * @param {object} order Mongoose order doc; mutated in place.
+ * @param {string} [updatedBy="system"] Who triggered the closure (e.g.
+ *   "seller", "customer", "delivery_agency").
+ */
+const closeCashPayment = (order, updatedBy = "system") => {
+  if (order.paymentMethodType !== "cash") {
+    return;
+  }
+
+  if (order.paymentStatus === "cancelled" && order.isPaid === false) {
+    return;
+  }
+
+  order.paymentStatus = "cancelled";
+  order.isPaid = false;
+  order.statusHistory.push({
+    status: "payment_cancelled",
+    note: "Payment cancelled — cash on delivery order reached a terminal state.",
+    updatedBy,
+  });
+};
+
 const refundCardOrder = async (order, stripe, updatedBy = "system") => {
   const shouldRefund =
     order.paymentMethodType === "card" &&
@@ -109,4 +144,4 @@ const refundCardOrder = async (order, stripe, updatedBy = "system") => {
   }
 };
 
-module.exports = { restockOrderItems, refundCardOrder };
+module.exports = { restockOrderItems, refundCardOrder, closeCashPayment };

@@ -74,6 +74,7 @@ const orderSchema = new mongoose.Schema(
         "pending", // Waiting for payment
         "authorized", // Card authorized (funds on hold)
         "failed", // Payment failed
+        "cancelled", // Payment cancelled (cash order at a terminal dead-end)
         "confirmed", // Payment confirmed by gateway
         "refunded", // Fully refunded
         "partially_refunded", // Partially refunded

@@ -2,8 +2,13 @@ const axios = require("axios");
 const Order = require("../models/orderModel");
 const Product = require("../models/productModel");
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
-// M2: Reused by the webhook-driven `returned` flow (restock + refund).
-const { restockOrderItems, refundCardOrder } = require("../utils/orderRecovery");
+// M2: Reused by the webhook-driven `returned`/`failed` flow (restock + refund
+// + cash payment closure).
+const {
+  restockOrderItems,
+  refundCardOrder,
+  closeCashPayment,
+} = require("../utils/orderRecovery");
 
 // Configuration
 // M3: Fixed broken default URL (was .../api/api/v1/)
@@ -218,13 +223,16 @@ class DeliveryService {
         updatedBy: "delivery_agency",
       });
 
-      // M2: A `returned` parcel is treated like a cancellation (decision 9) —
+      // M2: A `returned`/`failed` parcel is treated like a cancellation —
       // restore product stock and, for paid card orders, issue a Stripe refund
       // BEFORE persisting. Restock/refund are best-effort: refund failures are
       // recorded in statusHistory (refund_failed) without blocking the save.
-      if (mappedStatus === "returned") {
+      // Cash (COD) orders get their payment closed via closeCashPayment
+      // (`cancelled`) since there is no Stripe PaymentIntent to refund.
+      if (["returned", "failed"].includes(mappedStatus)) {
         await restockOrderItems(order, Product);
         await refundCardOrder(order, stripe, "delivery_agency");
+        closeCashPayment(order, "delivery_agency");
       }
 
       // If delivered, mark accordingly
