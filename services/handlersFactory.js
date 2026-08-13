@@ -200,7 +200,7 @@ exports.createOne = (Model) =>
     res.status(201).json(newDocument);
   });
 
-exports.getAll = (Model, searchFields = [], populationOpt) =>
+exports.getAll = (Model, searchFields = [], populationOpt, searchOptions) =>
   expressAsyncHandler(async (req, res, next) => {
     let filter;
     if (req.filterObj) {
@@ -211,7 +211,7 @@ exports.getAll = (Model, searchFields = [], populationOpt) =>
 
     let query = apiFeatures
       .filter()
-      .search(searchFields)
+      .search(searchFields, searchOptions)
       .sort()
       .limitFields();
 

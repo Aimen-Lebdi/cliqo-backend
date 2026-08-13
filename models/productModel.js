@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 
+const { normalizeSearchText } = require("../utils/searchNormalize");
+
 const productSchema = new mongoose.Schema(
   {
     name: {
@@ -92,7 +94,19 @@ const productSchema = new mongoose.Schema(
       },
       ref: "Brand",
       default: null,
-    }
+    },
+
+    // Normalized search fields (diacritic-stripped + Arabic-normalized +
+    // lowercased). Used for keyword search; kept hidden from API responses.
+    searchName: {
+      type: String,
+      select: false,
+      index: true,
+    },
+    searchDescription: {
+      type: String,
+      select: false,
+    },
   },
   {
     timestamps: true,
@@ -116,6 +130,13 @@ productSchema.pre(/^find/, function (next) {
     path: "brand",
     select: "name _id",
   });
+  next();
+});
+
+// Populate normalized search fields whenever a product is saved
+productSchema.pre("save", function (next) {
+  this.searchName = normalizeSearchText(this.name);
+  this.searchDescription = normalizeSearchText(this.description);
   next();
 });
 
@@ -166,6 +187,18 @@ const toIdString = (ref) => {
   return ref.toString();
 };
 
+// Helper: extract a string field value from a findOneAndUpdate update object.
+// Handles flat updates ({ name: "..." }), $set, and $setOnInsert forms.
+const textFromUpdate = (update, field) => {
+  if (!update) return undefined;
+  if (typeof update[field] === "string") return update[field];
+  if (update.$set && typeof update.$set[field] === "string")
+    return update.$set[field];
+  if (update.$setOnInsert && typeof update.$setOnInsert[field] === "string")
+    return update.$setOnInsert[field];
+  return undefined;
+};
+
 // Middleware to update product counts when multiple products are deleted at once
 productSchema.pre("deleteMany", async function () {
   // Fetch the products that will be deleted to capture their parent references
@@ -200,6 +233,20 @@ productSchema.post("deleteMany", async function () {
 productSchema.pre("findOneAndUpdate", async function () {
   // Store the original document to compare categories later
   this._originalProduct = await this.model.findOne(this.getQuery());
+
+  // Keep normalized search fields in sync when name/description change.
+  // findOneAndUpdate does NOT fire pre("save"), so recompute here and merge
+  // into the update via $set.
+  const update = this.getUpdate() || {};
+  const name = textFromUpdate(update, "name");
+  const description = textFromUpdate(update, "description");
+
+  if (typeof name === "string") {
+    this.set({ searchName: normalizeSearchText(name) });
+  }
+  if (typeof description === "string") {
+    this.set({ searchDescription: normalizeSearchText(description) });
+  }
 });
 
 productSchema.post("findOneAndUpdate", async function (doc) {

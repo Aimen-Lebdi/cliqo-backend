@@ -2,6 +2,8 @@
  * A reusable class to handle common API query features like filtering,
  * sorting, field limiting, searching, and pagination.
  */
+const { normalizeSearchText } = require("./searchNormalize");
+
 class ApiFeatures {
   /**
    * @param {object} mongooseQuery - The Mongoose query object (e.g., Product.find()).
@@ -110,9 +112,21 @@ class ApiFeatures {
    * This is now generic and reusable for any model.
    * @param {string[]} searchFields - An array of fields to search (e.g., ["name", "description"]).
    */
-  search(searchFields) {
+  search(searchFields, options = {}) {
     if (this.queryString.keyword && Array.isArray(searchFields)) {
-      const keyword = this.queryString.keyword;
+      let keyword = this.queryString.keyword;
+
+      // Normalize the keyword only when the target fields are themselves
+      // normalized (e.g., Product.searchName / searchDescription). Both sides
+      // must use identical normalization — normalizing here while the stored
+      // field is raw would regress accented/Arabic searches on other models
+      // (brand/category/user names).
+      if (options.normalizeKeyword) {
+        keyword = normalizeSearchText(keyword);
+        // Nothing meaningful left after normalization (e.g. only diacritics
+        // or whitespace) → don't apply any search filter.
+        if (!keyword) return this;
+      }
 
       // Map the search fields to a list of MongoDB conditions
       const searchConditions = searchFields.map((field) => ({

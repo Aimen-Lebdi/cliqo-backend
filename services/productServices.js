@@ -39,7 +39,14 @@ const processProductImages = expressAsyncHandler(async (req, res, next) => {
 });
 
 const createProduct = factory.createOne(Product);
-const getAllProducts = factory.getAll(Product, ["name", "description"]);
+// Search runs against the normalized search fields; the keyword is normalized
+// with the same util (normalizeKeyword: true) so both sides match byte-for-byte.
+const getAllProducts = factory.getAll(
+  Product,
+  ["searchName", "searchDescription"],
+  undefined,
+  { normalizeKeyword: true }
+);
 const getOneProduct = factory.getOne(Product);
 const updateProduct = factory.updateOne(Product);
 const deleteProduct = factory.deleteOne(Product);
