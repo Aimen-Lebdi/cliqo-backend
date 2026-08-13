@@ -29,6 +29,10 @@ const setRefreshTokenCookie = (res, refreshToken) => {
   res.cookie("refreshToken", refreshToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
+    // NOTE (D2): sameSite "strict" may block the silent-refresh cookie in
+    // cross-origin production (frontend cliqo.onrender.com vs backend
+    // cliqo-backend.onrender.com). If prod refresh starts failing, switch to
+    // "lax" (or "none"+secure) or send the refreshToken in the request body.
     sameSite: "strict",
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
   });
