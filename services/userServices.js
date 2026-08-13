@@ -317,10 +317,18 @@ const updateLoggedUserPassword = expressAsyncHandler(async (req, res, next) => {
 const updateLoggedUserData = expressAsyncHandler(async (req, res, next) => {
   const updateData = {
     name: req.body.name,
-    image: req.body.image,
   };
 
-  // Delete the old Cloudinary image when replaced/removed (fire-and-forget)
+  // Only touch image when explicitly provided:
+  // - File/URL -> replace
+  // - null (from "__NULL__" marker via handleNullValues) -> remove
+  // - undefined (name-only update) -> preserve existing image
+  if (req.body.image !== undefined) {
+    updateData.image = req.body.image;
+  }
+
+  // Delete the old Cloudinary image when replaced/removed (fire-and-forget).
+  // cleanupOldUserImage no-ops on undefined, so name-only updates never delete.
   const existingUser = await User.findById(req.user._id);
   cleanupOldUserImage(existingUser, req.body.image);
 
