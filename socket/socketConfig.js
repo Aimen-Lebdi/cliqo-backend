@@ -5,9 +5,19 @@ const SocketHandlers = require("./socketHandlers");
 
 class SocketConfig {
   constructor(server) {
+    // M2: Build allowed origins from CORS_ORIGIN (comma-split), mirroring the
+    // HTTP CORS config in server.js. Fallback covers local Vite + Docker.
+    const allowedOrigins = process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(",")
+      : [
+          "http://localhost:5173", // local Vite frontend
+          "http://localhost", // Docker frontend
+          "http://localhost:80", // Docker frontend explicit port
+        ];
+
     this.io = new Server(server, {
       cors: {
-        origin: ["http://localhost:5173"], // Your frontend URLs
+        origin: allowedOrigins,
         credentials: true,
         methods: ["GET", "POST"],
       },
@@ -115,30 +125,9 @@ class SocketConfig {
       }
 
       // Setup event handlers
+      // NOTE: join_dashboard / leave_dashboard are handled in
+      // SocketHandlers.handleActivityEvents (single source of truth).
       this.socketHandlers.setupHandlers(socket);
-
-      // Handle dashboard join requests from frontend
-      socket.on("join_dashboard", () => {
-        if (socket.user.role === "admin") {
-          socket.join("dashboard");
-          console.log(
-            `📊 Admin ${socket.user.name} joined dashboard room`
-          );
-          socket.emit("dashboard_joined", {
-            message: "Successfully joined dashboard",
-          });
-        } else {
-          socket.emit("dashboard_error", {
-            message: "Access denied: Admin role required",
-          });
-        }
-      });
-
-      socket.on("leave_dashboard", () => {
-        socket.leave("dashboard");
-        console.log(`👋 User ${socket.user.name} left dashboard room`);
-        socket.emit("dashboard_left", { message: "Left dashboard room" });
-      });
 
       // Handle ping/pong for connection health
       socket.on("ping", () => {
@@ -157,21 +146,15 @@ class SocketConfig {
     });
   }
 
-  // Method to emit to specific rooms
-  emitToAdmins(event, data) {
-    this.io.to("admin_room").emit(event, data);
-  }
-
+  // Method to emit to the dashboard room (admin-only live feed)
   emitToDashboard(event, data) {
     this.io.to("dashboard").emit(event, data);
   }
 
-  emitToUser(userId, event, data) {
-    this.io.to(`user_${userId}`).emit(event, data);
-  }
-
-  emitToAll(event, data) {
-    this.io.emit(event, data);
+  // Whether at least one admin is currently in the dashboard room. Used to
+  // skip expensive realtime stats recomputation when nobody is watching.
+  hasDashboardListeners() {
+    return (this.io.sockets.adapter.rooms.get("dashboard")?.size || 0) > 0;
   }
 
   // Get IO instance

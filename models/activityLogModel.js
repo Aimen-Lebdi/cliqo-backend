@@ -16,30 +16,11 @@ const activityLogSchema = new mongoose.Schema(
       ],
     },
     activity: {
+      // Display-only free text. No enum on purpose: bulk operations produce dynamic
+      // strings (e.g. `${model}s Bulk Deleted`) and order/user lifecycle actions add
+      // new literals over time. Enum validation here was silently dropping valid logs.
       type: String,
       required: [true, "Activity name is required"],
-      enum: [
-        "New Order Placed",
-        "Order Updated",
-        "Order Cancelled",
-        "Product Created",
-        "Product Updated",
-        "Product Deleted",
-        "Category Created",
-        "Category Updated",
-        "Category Deleted",
-        "Brand Created",
-        "Brand Updated",
-        "Brand Deleted",
-        "User Registered",
-        "User Updated",
-        "User Deleted",
-        "SubCategory Created",
-        "SubCategory Updated",
-        "SubCategory Deleted",
-        "Cart Updated",
-        "Wishlist Updated",
-      ],
     },
     user: {
       name: {
@@ -85,6 +66,7 @@ const activityLogSchema = new mongoose.Schema(
         "User",
         "SubCategory",
         "Cart",
+        "Wishlist",
       ],
     },
     metadata: {

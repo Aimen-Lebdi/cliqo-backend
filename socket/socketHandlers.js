@@ -1,4 +1,6 @@
 // Socket event handlers for different activities
+const { computeActivityStats } = require("./activityStats");
+
 class SocketHandlers {
   constructor(io) {
     this.io = io;
@@ -57,6 +59,15 @@ class SocketHandlers {
           message: "Failed to join dashboard or load activities",
         });
       }
+    });
+
+    // Handle leaving the dashboard - reset the initial-activities flag so a
+    // subsequent join_dashboard re-sends the initial activity list.
+    socket.on("leave_dashboard", () => {
+      socket.leave("dashboard");
+      socket.hasReceivedInitialActivities = false;
+      console.log(`👋 User ${socket.user.name} left dashboard room`);
+      socket.emit("dashboard_left", { message: "Left dashboard room" });
     });
 
     // Handle activity filters
@@ -129,34 +140,12 @@ class SocketHandlers {
     socket.on("request_activity_stats", async () => {
       if (socket.user.role === "admin") {
         try {
-          const ActivityLog = require("../models/activityLogModel");
-
-          const now = new Date();
-          const last24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-          // Get activity stats for last 24 hours
-          const stats = await ActivityLog.aggregate([
-            {
-              $match: {
-                createdAt: { $gte: last24h },
-              },
-            },
-            {
-              $group: {
-                _id: "$type",
-                count: { $sum: 1 },
-              },
-            },
-          ]);
-
-          const totalActivities = await ActivityLog.countDocuments({
-            createdAt: { $gte: last24h },
-          });
+          // FIXED (M6): Use the shared stats helper (also used by the activity
+          // logger to push live stats) to avoid duplicated aggregation queries.
+          const realtimeStats = await computeActivityStats();
 
           socket.emit("activity_stats", {
-            stats: stats,
-            total: totalActivities,
-            timeframe: "24h",
+            ...realtimeStats,
             timestamp: new Date(),
           });
 
@@ -167,103 +156,11 @@ class SocketHandlers {
         }
       }
     });
-
-    // FIXED: Explicit handler for requesting initial activities
-    socket.on("request_initial_activities", async () => {
-      if (socket.user.role !== "admin") {
-        socket.emit("activity_error", {
-          message: "Access denied: Admin role required",
-        });
-        return;
-      }
-
-      // Check if user is in dashboard room
-      const rooms = Array.from(socket.rooms);
-      if (!rooms.includes("dashboard")) {
-        socket.emit("activity_error", {
-          message: "Please join dashboard first",
-        });
-        return;
-      }
-
-      try {
-        if (socket.hasReceivedInitialActivities) {
-          console.log(`⏭️ Admin ${socket.user.name} already received initial activities`);
-          return;
-        }
-
-        const ActivityLog = require("../models/activityLogModel");
-
-        const recentActivities = await ActivityLog.find({})
-          .sort({ createdAt: -1 })
-          .limit(20)
-          .select({
-            type: 1,
-            activity: 1,
-            user: 1,
-            description: 1,
-            status: 1,
-            amount: 1,
-            createdAt: 1,
-          });
-
-        socket.hasReceivedInitialActivities = true;
-
-        socket.emit("initial_activities", {
-          activities: recentActivities,
-          timestamp: new Date(),
-        });
-
-        console.log(`✅ Admin ${socket.user.name} received ${recentActivities.length} initial activities`);
-      } catch (error) {
-        console.error("Error fetching initial activities:", error);
-        socket.emit("activity_error", {
-          message: "Failed to load activities",
-        });
-      }
-    });
-  }
-
-  // Handle user-specific events
-  handleUserEvents(socket) {
-    // When user wants to see their own activities
-    socket.on("get_my_activities", async () => {
-      try {
-        const ActivityLog = require("../models/activityLogModel");
-
-        const userActivities = await ActivityLog.find({
-          "user.id": socket.user._id,
-        })
-          .sort({ createdAt: -1 })
-          .limit(20)
-          .select({
-            type: 1,
-            activity: 1,
-            description: 1,
-            status: 1,
-            amount: 1,
-            createdAt: 1,
-          });
-
-        socket.emit("my_activities", {
-          activities: userActivities,
-          timestamp: new Date(),
-        });
-
-        console.log(`📝 Sent ${userActivities.length} activities to ${socket.user.name}`);
-      } catch (error) {
-        console.error("Error getting user activities:", error);
-        socket.emit("activity_error", {
-          message: "Failed to load your activities",
-        });
-      }
-    });
   }
 
   // Setup all handlers
   setupHandlers(socket) {
     this.handleActivityEvents(socket);
-    this.handleUserEvents(socket);
 
     // Add more handler categories as needed
     // this.handleOrderEvents(socket);

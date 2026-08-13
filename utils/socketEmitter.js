@@ -12,29 +12,18 @@ class SocketEmitter {
     return this.socketInstance;
   }
 
-  // Convenience methods
-  emitToAdmins(event, data) {
-    if (this.socketInstance) {
-      this.socketInstance.emitToAdmins(event, data);
-    }
-  }
-
+  // Convenience method - emits to the dashboard room (admin live feed)
   emitToDashboard(event, data) {
     if (this.socketInstance) {
       this.socketInstance.emitToDashboard(event, data);
     }
   }
 
-  emitToUser(userId, event, data) {
-    if (this.socketInstance) {
-      this.socketInstance.emitToUser(userId, event, data);
-    }
-  }
-
-  emitToAll(event, data) {
-    if (this.socketInstance) {
-      this.socketInstance.emitToAll(event, data);
-    }
+  // Whether at least one admin is currently in the dashboard room
+  hasDashboardListeners() {
+    return this.socketInstance
+      ? this.socketInstance.hasDashboardListeners()
+      : false;
   }
 }
 

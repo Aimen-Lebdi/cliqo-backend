@@ -1,5 +1,6 @@
 const ActivityLog = require("../models/activityLogModel");
 const socketInstance = require("../utils/socketEmitter");
+const { computeActivityStats } = require("./activityStats");
 
 class ActivityLogger {
   static async logActivity({
@@ -54,8 +55,31 @@ class ActivityLogger {
           // FIXED: Only emit to dashboard room (admins who joined dashboard)
           // This prevents duplicate emissions
           socketInstance.getSocket().emitToDashboard("new_activity", activityData);
-          
+
           console.log(`📤 Activity emitted to dashboard: ${activity}`);
+
+          // FIXED (M6): Also push fresh realtime stats so the dashboard's live
+          // metrics (cards/chart) refresh in sync with the new activity. Gated
+          // on dashboard listeners and fire-and-forget so activity logging is
+          // never blocked by the stats aggregation.
+          if (socketInstance.getSocket().hasDashboardListeners()) {
+            computeActivityStats()
+              .then((realtimeStats) => {
+                socketInstance
+                  .getSocket()
+                  .emitToDashboard("activity_stats", {
+                    ...realtimeStats,
+                    timestamp: new Date(),
+                  });
+                console.log("📊 Realtime activity stats pushed to dashboard");
+              })
+              .catch((statsError) => {
+                console.error(
+                  "Error computing realtime activity stats:",
+                  statsError.message
+                );
+              });
+          }
         } catch (socketError) {
           console.error("Error emitting socket event:", socketError.message);
           // Don't throw - activity was logged successfully
