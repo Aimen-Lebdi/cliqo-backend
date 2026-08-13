@@ -43,6 +43,7 @@ router.put(
   authServices.allowTo("user","admin"),
   uploadUserImage,
   processUserImage,
+  handleNullValues("image"),
   updateLoggedUserDataValidator,
   updateLoggedUserData
 );

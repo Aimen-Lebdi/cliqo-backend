@@ -6,6 +6,7 @@ const sendEmail = require("../utils/sendEmail");
 const { createAccessToken } = require("./authServices");
 const { uploadSingleImage } = require("../middlewares/uploadImageMiddleware");
 const ActivityLogger = require("../socket/activityLogger");
+const { deleteImageFromCloudinary } = require("../config/cloudinary");
 
 // Upload to Cloudinary 'users' folder
 const uploadUserImage = uploadSingleImage("image", "users");
@@ -19,10 +20,33 @@ const processUserImage = expressAsyncHandler(async (req, res, next) => {
   next();
 });
 
+/**
+ * Fire-and-forget delete of a user's previous Cloudinary image when it is
+ * replaced with a new one or removed (set to null). Only runs when an image
+ * change was actually requested and the old image differs from the new value.
+ */
+const cleanupOldUserImage = (existingUser, newImage) => {
+  if (newImage === undefined) return; // image not part of this update
+  const oldImage = existingUser?.image;
+  if (oldImage && oldImage !== newImage) {
+    deleteImageFromCloudinary(oldImage);
+  }
+};
+
 const createUser = factory.createOne(User);
 const getAllUsers = factory.getAll(User, ["name"]);
 const getOneUser = factory.getOne(User);
 const updateUser = expressAsyncHandler(async (req, res, next) => {
+  // Fetch first so we can clean up the previous Cloudinary image (if any)
+  const existingUser = await User.findById(req.params.id);
+
+  if (!existingUser) {
+    return next(new endpointError(`there is no user with this ID format`, 404));
+  }
+
+  // Delete the old Cloudinary image when replaced/removed (fire-and-forget)
+  cleanupOldUserImage(existingUser, req.body.image);
+
   const updatedUser = await User.findByIdAndUpdate(
     req.params.id,
     {
@@ -35,10 +59,6 @@ const updateUser = expressAsyncHandler(async (req, res, next) => {
     },
     { new: true }
   );
-
-  if (!updatedUser) {
-    return next(new endpointError(`there is no user with this ID format`, 404));
-  }
 
   // Log activity
   if (req.user) {
@@ -299,6 +319,10 @@ const updateLoggedUserData = expressAsyncHandler(async (req, res, next) => {
     name: req.body.name,
     image: req.body.image,
   };
+
+  // Delete the old Cloudinary image when replaced/removed (fire-and-forget)
+  const existingUser = await User.findById(req.user._id);
+  cleanupOldUserImage(existingUser, req.body.image);
 
   const updatedUser = await User.findByIdAndUpdate(
     req.user._id,
