@@ -66,6 +66,18 @@ class ApiFeatures {
           mongoQuery[field] = {};
         }
         mongoQuery[field][operator] = parsedValue;
+      } else if (typeof value === "string" && value.includes(",")) {
+        // Multi-value filter (e.g., "category=id1,id2") → MongoDB $in
+        // This supports the shop's multi-select category/brand/subcategory filters.
+        const values = value
+          .split(",")
+          .map((v) => this._parseValue(v))
+          .filter((v) => v !== "" && v !== undefined && v !== null);
+
+        // Only apply the filter when at least one non-empty value remains
+        if (values.length > 0) {
+          mongoQuery[key] = { $in: values };
+        }
       } else {
         // If no nested operator, treat it as a simple equality filter
         mongoQuery[key] = this._parseValue(value);

@@ -26,7 +26,7 @@ const createFilterObj = async (req, res, next) => {
   if (req.params.categoryId) {
     filterObject = { category: req.params.categoryId };
   }
-  req.filterObject = filterObject;
+  req.filterObj = filterObject;
   next();
 };
 

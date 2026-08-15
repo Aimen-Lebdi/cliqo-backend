@@ -239,7 +239,7 @@ exports.getAll = (Model, searchFields = [], populationOpt, searchOptions) =>
     }
 
     res.status(200).json({
-      result: documents.length,
+      result: documentsCounts,
       pagination: apiFeatures.pagination,
       documents,
     });
