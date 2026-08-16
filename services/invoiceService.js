@@ -8,7 +8,7 @@ const STORE_INFO = {
   phone: process.env.STORE_PHONE || "+213 000 000 000",
   email: process.env.STORE_EMAIL || "support@cliqo.store",
 };
-const CURRENCY = "DA";
+const CURRENCY = "DZD";
 
 class InvoiceService {
   /**
