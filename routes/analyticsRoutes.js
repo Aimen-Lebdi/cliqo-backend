@@ -8,6 +8,12 @@ const {
   getCustomersAnalytics,
   getOrdersAnalytics,
   getTopProductAnalytics,
+  getOrderStatus,
+  getPaymentMethods,
+  getLowStock,
+  getLowStockThreshold,
+  updateLowStockThreshold,
+  getSalesBy,
 } = require("../controllers/analyticsController");
 
 // Assuming you have auth middleware
@@ -71,5 +77,37 @@ router.get("/orders", getOrdersAnalytics);
  * GET /api/v1/analytics/top-product?startDate=2024-01-01&endDate=2024-12-31
  */
 router.get("/top-product", getTopProductAnalytics);
+
+/**
+ * Order status breakdown (4 buckets)
+ * GET /api/v1/analytics/order-status?startDate=2024-01-01&endDate=2024-12-31
+ */
+router.get("/order-status", getOrderStatus);
+
+/**
+ * Payment method breakdown (card vs cash)
+ * GET /api/v1/analytics/payment-methods?startDate=2024-01-01&endDate=2024-12-31
+ */
+router.get("/payment-methods", getPaymentMethods);
+
+/**
+ * Low-stock products (uses configured threshold)
+ * GET /api/v1/analytics/low-stock
+ */
+router.get("/low-stock", getLowStock);
+
+/**
+ * Low-stock threshold setting
+ * GET /api/v1/analytics/settings/low-stock-threshold
+ * PUT /api/v1/analytics/settings/low-stock-threshold  { threshold: Number }
+ */
+router.get("/settings/low-stock-threshold", getLowStockThreshold);
+router.put("/settings/low-stock-threshold", updateLowStockThreshold);
+
+/**
+ * Revenue by category/brand
+ * GET /api/v1/analytics/sales-by?groupBy=category|brand&startDate=2024-01-01&endDate=2024-12-31
+ */
+router.get("/sales-by", getSalesBy);
 
 module.exports = router;
