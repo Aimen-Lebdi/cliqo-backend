@@ -97,15 +97,17 @@ const calculateTotalRevenue = async (startDate = null, endDate = null) => {
 
       if (previousTotal > 0) {
         percentageChange = ((currentTotal - previousTotal) / previousTotal) * 100;
-      } else if (currentTotal > 0) {
-        percentageChange = 100;
+      } else {
+        // No previous-period baseline -> can't compute a change (null = "New").
+        percentageChange = null;
       }
     }
 
     return {
       total: currentTotal,
-      percentageChange: parseFloat(percentageChange.toFixed(2)),
-      trend: percentageChange >= 0 ? "up" : "down",
+      percentageChange:
+        percentageChange === null ? null : parseFloat(percentageChange.toFixed(2)),
+      trend: percentageChange === null ? "neutral" : percentageChange >= 0 ? "up" : "down",
     };
   } catch (error) {
     throw new Error(`Error calculating total revenue: ${error.message}`);
@@ -143,15 +145,17 @@ const calculateNewCustomers = async (startDate = null, endDate = null) => {
 
       if (previousCount > 0) {
         percentageChange = ((currentCount - previousCount) / previousCount) * 100;
-      } else if (currentCount > 0) {
-        percentageChange = 100;
+      } else {
+        // No previous-period baseline -> can't compute a change (null = "New").
+        percentageChange = null;
       }
     }
 
     return {
       total: currentCount,
-      percentageChange: parseFloat(percentageChange.toFixed(2)),
-      trend: percentageChange >= 0 ? "up" : "down",
+      percentageChange:
+        percentageChange === null ? null : parseFloat(percentageChange.toFixed(2)),
+      trend: percentageChange === null ? "neutral" : percentageChange >= 0 ? "up" : "down",
     };
   } catch (error) {
     throw new Error(`Error calculating new customers: ${error.message}`);
@@ -198,15 +202,17 @@ const calculateTotalOrders = async (startDate = null, endDate = null, paidOnly =
 
       if (previousCount > 0) {
         percentageChange = ((currentCount - previousCount) / previousCount) * 100;
-      } else if (currentCount > 0) {
-        percentageChange = 100;
+      } else {
+        // No previous-period baseline -> can't compute a change (null = "New").
+        percentageChange = null;
       }
     }
 
     return {
       total: currentCount,
-      percentageChange: parseFloat(percentageChange.toFixed(2)),
-      trend: percentageChange >= 0 ? "up" : "down",
+      percentageChange:
+        percentageChange === null ? null : parseFloat(percentageChange.toFixed(2)),
+      trend: percentageChange === null ? "neutral" : percentageChange >= 0 ? "up" : "down",
     };
   } catch (error) {
     throw new Error(`Error calculating total orders: ${error.message}`);
@@ -296,8 +302,9 @@ const getTopProduct = async (startDate = null, endDate = null) => {
 
       if (previousQuantity > 0) {
         percentageChange = ((topProduct.totalQuantity - previousQuantity) / previousQuantity) * 100;
-      } else if (topProduct.totalQuantity > 0) {
-        percentageChange = 100;
+      } else {
+        // No previous-period baseline -> can't compute a change (null = "New").
+        percentageChange = null;
       }
     }
 
@@ -306,8 +313,9 @@ const getTopProduct = async (startDate = null, endDate = null) => {
       name: topProduct.productDetails?.name || "Unknown Product",
       totalQuantity: topProduct.totalQuantity,
       totalRevenue: topProduct.totalRevenue,
-      percentageChange: parseFloat(percentageChange.toFixed(2)),
-      trend: percentageChange >= 0 ? "up" : "down",
+      percentageChange:
+        percentageChange === null ? null : parseFloat(percentageChange.toFixed(2)),
+      trend: percentageChange === null ? "neutral" : percentageChange >= 0 ? "up" : "down",
     };
   } catch (error) {
     throw new Error(`Error getting top product: ${error.message}`);
@@ -535,15 +543,17 @@ const calculateAOV = async (startDate = null, endDate = null) => {
 
       if (prevAov > 0) {
         percentageChange = ((total - prevAov) / prevAov) * 100;
-      } else if (total > 0) {
-        percentageChange = 100;
+      } else {
+        // No previous-period baseline -> can't compute a change (null = "New").
+        percentageChange = null;
       }
     }
 
     return {
       total: parseFloat(total.toFixed(2)),
-      percentageChange: parseFloat(percentageChange.toFixed(2)),
-      trend: percentageChange >= 0 ? "up" : "down",
+      percentageChange:
+        percentageChange === null ? null : parseFloat(percentageChange.toFixed(2)),
+      trend: percentageChange === null ? "neutral" : percentageChange >= 0 ? "up" : "down",
     };
   } catch (error) {
     throw new Error(`Error calculating average order value: ${error.message}`);
@@ -586,15 +596,17 @@ const calculateConversion = async (startDate = null, endDate = null) => {
 
       if (prevConversion > 0) {
         percentageChange = ((total - prevConversion) / prevConversion) * 100;
-      } else if (total > 0) {
-        percentageChange = 100;
+      } else {
+        // No previous-period baseline -> can't compute a change (null = "New").
+        percentageChange = null;
       }
     }
 
     return {
       total: parseFloat(total.toFixed(2)),
-      percentageChange: parseFloat(percentageChange.toFixed(2)),
-      trend: percentageChange >= 0 ? "up" : "down",
+      percentageChange:
+        percentageChange === null ? null : parseFloat(percentageChange.toFixed(2)),
+      trend: percentageChange === null ? "neutral" : percentageChange >= 0 ? "up" : "down",
     };
   } catch (error) {
     throw new Error(`Error calculating conversion: ${error.message}`);
