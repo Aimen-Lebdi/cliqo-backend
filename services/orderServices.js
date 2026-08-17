@@ -3,7 +3,8 @@ const asyncHandler = require("express-async-handler");
 const { getAll, getOne } = require("./handlersFactory");
 const ApiError = require("../utils/endpointError");
 const { post } = require("axios");
-const { logOrderActivity } = require("../socket/activityLogger");
+const ActivityLogger = require("../socket/activityLogger");
+const { logOrderActivity, logPaymentActivity, checkAndLogStockEvents } = ActivityLogger;
 
 const User = require("../models/userModel");
 const Product = require("../models/productModel");
@@ -31,6 +32,13 @@ const {
 // M3: Single source of truth for the flat shipping fee (persisted on orders so
 // admin/confirmation subtotals compute as totalOrderPrice - shippingPrice).
 const SHIPPING_PRICE = 500;
+
+// M2: System user for Stripe webhook-triggered activity logs (no human actor).
+const SYSTEM_USER = Object.freeze({
+  _id: "000000000000000000000000",
+  name: "System (Stripe)",
+  role: "admin",
+});
 
 // M0: Model helper aliases (were undefined, causing every order endpoint to 500)
 const create = (data) => Order.create(data);
@@ -97,6 +105,29 @@ const createCashOrder = asyncHandler(async (req, res, next) => {
       },
     }));
     await bulkWrite(bulkOption, {});
+
+    // M5: Check each product for low/out-of-stock after order-creation decrement
+    if (req.user) {
+      const productIds = cart.cartItems.map((item) => item.product);
+      const products = await Product.find({ _id: { $in: productIds } });
+      for (const item of cart.cartItems) {
+        const product = products.find(
+          (p) => String(p._id) === String(item.product)
+        );
+        if (product) {
+          const quantityAfter = product.quantity; // already decremented
+          const quantityBefore = quantityAfter + item.quantity; // reverse
+          checkAndLogStockEvents(
+            product,
+            quantityBefore,
+            quantityAfter,
+            req.user,
+            { source: "order_creation", orderId: order._id }
+          ).catch(() => {}); // fire-and-forget
+        }
+      }
+    }
+
     await findByIdAndDelete(req.params.cartId);
   }
 
@@ -134,6 +165,13 @@ const handlePaymentCaptured = async (charge) => {
 
     await order.save();
     console.log(`✔️ Payment captured for order: ${order._id}`);
+
+    // M2: Log payment captured — this fires as a backstop for orders that
+    // weren't already marked paid (the normal path is createCardOrder).
+    await logPaymentActivity("captured", order, SYSTEM_USER, {
+      chargeId: charge.id,
+      paymentIntentId: charge.payment_intent || null,
+    });
   } catch (error) {
     console.error("Error handling payment capture:", error.message);
   }
@@ -158,8 +196,44 @@ const handlePaymentRefunded = async (charge) => {
 
     await order.save();
     console.log(`↩️ Payment refunded for order: ${order._id}`);
+
+    // M2: Log payment refunded so the dashboard shows the refund event.
+    await logPaymentActivity("refunded", order, SYSTEM_USER, {
+      chargeId: charge.id,
+      paymentIntentId: charge.payment_intent || null,
+    });
   } catch (error) {
     console.error("Error handling payment refund:", error.message);
+  }
+};
+
+// M2: Handle failed payment webhooks (payment_intent.payment_failed).
+const handlePaymentFailed = async (paymentIntent) => {
+  try {
+    const order = await _findOne({
+      stripePaymentIntentId: paymentIntent.id,
+    });
+
+    if (!order) return;
+
+    order.paymentStatus = "failed";
+    order.statusHistory.push({
+      status: "payment_failed",
+      note: `Payment failed. Error: ${paymentIntent.last_payment_error?.message || "Unknown"}`,
+      updatedBy: "system",
+    });
+
+    await order.save();
+    console.log(`❌ Payment failed for order: ${order._id}`);
+
+    // M2: Log payment failed so the owner sees it in the dashboard.
+    await logPaymentActivity("failed", order, SYSTEM_USER, {
+      chargeId: paymentIntent.latest_charge || null,
+      paymentIntentId: paymentIntent.id,
+      errorMessage: paymentIntent.last_payment_error?.message || "Unknown",
+    });
+  } catch (error) {
+    console.error("Error handling payment failure:", error.message);
   }
 };
 
@@ -209,11 +283,9 @@ const updateOrderToPaid = asyncHandler(async (req, res, next) => {
   order.paidAt = Date.now();
   const updatedOrder = await order.save();
 
-  // Log activity
+  // M2: Log as "Payment Marked Paid" instead of the vague "Order Updated".
   if (req.user) {
-    await logOrderActivity("update", updatedOrder, req.user, {
-      changes: "payment status marked as paid",
-    });
+    await logPaymentActivity("markedPaid", updatedOrder, req.user);
   }
 
   res.status(200).json({ status: "success", data: updatedOrder });
@@ -380,6 +452,19 @@ const createCardOrder = async (session) => {
   }
 
   if (order) {
+    // M2: Log both the order creation and the payment capture — card orders
+    // were previously invisible in the dashboard activity feed.
+    if (user) {
+      await logOrderActivity("create", order, user, {
+        paymentMethod: "card",
+        itemsCount: cart.cartItems.length,
+      });
+      await logPaymentActivity("captured", order, user, {
+        chargeId: session.payment_intent || null,
+        paymentIntentId: session.payment_intent || null,
+      });
+    }
+
     const bulkOption = cart.cartItems.map((item) => ({
       updateOne: {
         filter: { _id: item.product },
@@ -387,6 +472,29 @@ const createCardOrder = async (session) => {
       },
     }));
     await bulkWrite(bulkOption, {});
+
+    // M5: Check each product for low/out-of-stock after card order creation
+    if (user) {
+      const productIds = cart.cartItems.map((item) => item.product);
+      const products = await Product.find({ _id: { $in: productIds } });
+      for (const item of cart.cartItems) {
+        const product = products.find(
+          (p) => String(p._id) === String(item.product)
+        );
+        if (product) {
+          const quantityAfter = product.quantity;
+          const quantityBefore = quantityAfter + item.quantity;
+          checkAndLogStockEvents(
+            product,
+            quantityBefore,
+            quantityAfter,
+            user,
+            { source: "order_creation", orderId: order._id }
+          ).catch(() => {}); // fire-and-forget
+        }
+      }
+    }
+
     await findByIdAndDelete(cartId);
   }
 
@@ -436,6 +544,10 @@ const webhookCheckout = asyncHandler(async (req, res, next) => {
 
     case "charge.refunded":
       await handlePaymentRefunded(event.data.object);
+      break;
+
+    case "payment_intent.payment_failed":
+      await handlePaymentFailed(event.data.object);
       break;
 
     case "payout.paid":
@@ -894,7 +1006,8 @@ const updateOrder = asyncHandler(async (req, res, next) => {
         const stockResult = await applyQuantityDeltas(
           order,
           matchedChanges,
-          Product
+          Product,
+          { user: req.user }
         );
         if (!stockResult.ok) {
           return next(new ApiError(stockResult.reason, 400));

@@ -9,6 +9,8 @@ const ActivityLog = require("../models/activityLogModel");
  * @returns {Promise<{
  *   stats: Array<{ _id: string, count: number }>,
  *   dailyStats: Array<{ _id: string, count: number }>,
+ *   statusStats: Array<{ _id: string, count: number }>,
+ *   failureRate: number,
  *   total: number,
  *   timeframe: string
  * }>}
@@ -60,7 +62,32 @@ async function computeActivityStats() {
     createdAt: { $gte: last24h },
   });
 
-  return { stats, dailyStats, total, timeframe: "24h" };
+  // M9: Status breakdown — count per status (success/failed/pending) so the
+  // dashboard can show failure rate and highlight issues.
+  const statusStats = await ActivityLog.aggregate([
+    {
+      $match: {
+        createdAt: { $gte: last24h },
+      },
+    },
+    {
+      $group: {
+        _id: "$status",
+        count: { $sum: 1 },
+      },
+    },
+    {
+      $sort: { _id: 1 },
+    },
+  ]);
+
+  // M9: Compute failure rate as a percentage (0–100, rounded to 1 decimal).
+  const failedEntry = statusStats.find((s) => s._id === "failed");
+  const failedCount = failedEntry ? failedEntry.count : 0;
+  const failureRate =
+    total > 0 ? Math.round((failedCount / total) * 1000) / 10 : 0;
+
+  return { stats, dailyStats, statusStats, failureRate, total, timeframe: "24h" };
 }
 
 module.exports = { computeActivityStats };

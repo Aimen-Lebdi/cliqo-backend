@@ -62,6 +62,7 @@ exports.signUp = expressAsyncHandler(async (req, res, next) => {
   await ActivityLogger.logUserActivity("create", user, user, {
     registrationMethod: "email",
     ipAddress: req.ip,
+    userAgent: req.get("user-agent"),
   });
 
   // Strip password from response
@@ -80,11 +81,32 @@ exports.signIn = expressAsyncHandler(async (req, res, next) => {
     email: req.body.email,
   }).select("+password");
 
+  const loginMeta = {
+    ipAddress: req.ip,
+    userAgent: req.get("user-agent"),
+  };
+
   if (!user || !(await bcrypt.compare(req.body.password, user.password))) {
+    // M4: Log failed login attempt
+    const logUser =
+      user ||
+      { name: "Unknown", _id: new (require("mongoose").Types.ObjectId)(), role: "user" };
+    await ActivityLogger.logAuthActivity(
+      "failed",
+      user || { email: req.body.email },
+      logUser,
+      { status: "failed", ...loginMeta }
+    );
     return next(new Error("Invalid email or password"));
   }
 
   if (!user.active) {
+    // M4: Log failed login — deactivated account
+    await ActivityLogger.logAuthActivity("failed", user, user, {
+      status: "failed",
+      reason: "account_deactivated",
+      ...loginMeta,
+    });
     return next(
       new endpointError(
         "Your account has been deactivated. Please contact support for assistance.",
@@ -97,6 +119,9 @@ exports.signIn = expressAsyncHandler(async (req, res, next) => {
   const refreshToken = createRefreshToken(user._id);
 
   setRefreshTokenCookie(res, refreshToken);
+
+  // M4: Log successful login
+  await ActivityLogger.logAuthActivity("success", user, user, loginMeta);
 
   // Strip password from response
   const userResponse = user.toObject();
@@ -314,6 +339,7 @@ exports.forgotPassword = expressAsyncHandler(async (req, res, next) => {
       metadata: {
         requestTime: new Date(),
         ipAddress: req.ip,
+        userAgent: req.get("user-agent"),
       },
     });
   } catch (err) {
@@ -382,6 +408,7 @@ exports.resetPassword = expressAsyncHandler(async (req, res, next) => {
   await ActivityLogger.logUserActivity("passwordChange", user, user, {
     resetMethod: "email",
     ipAddress: req.ip,
+    userAgent: req.get("user-agent"),
   });
 
   res.status(200).json({

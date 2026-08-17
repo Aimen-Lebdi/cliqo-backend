@@ -99,13 +99,8 @@ const ACTIVITY_CONFIG = {
       delete: "logSubCategoryActivity",
     },
   },
-  Cart: {
-    modelType: "cart",
-    nameField: "_id",
-    methods: {
-      update: "logCartActivity",
-    },
-  },
+  // M6: Cart removed — cart routes don't use the factory handlers, so this
+  // config was dead code that could never trigger.
 };
 
 // Helper function to get activity config
@@ -305,34 +300,53 @@ exports.updateOne = (Model) =>
     }
 
     // Log activity if config exists and user is available
+    // M6: Skip logging when detectChanges finds no real change (prevents
+    // noisy "general update" rows from no-op PATCH requests).
     if (config && req.user && originalDocument) {
       const logMethod = ActivityLogger[config.methods.update];
       if (logMethod) {
-        // Detect changes
         const changes = detectChanges(originalDocument, updatedDocument, config);
-        const additionalData = {
-          changes:
-            changes.length > 0
-              ? changes.join(", ")
-              : "general update",
-          originalData: {
-            [config.nameField]: originalDocument[config.nameField],
-            ...(originalDocument.image && {
-              image: originalDocument.image,
-            }),
-            ...(originalDocument.price && { price: originalDocument.price }),
-            ...(originalDocument.quantity && {
-              quantity: originalDocument.quantity,
-            }),
-            ...(originalDocument.status && { status: originalDocument.status }),
-            ...(originalDocument.deliveryStatus && {
-              deliveryStatus: originalDocument.deliveryStatus,
-            }),
-          },
-        };
 
-        await logMethod("update", updatedDocument, req.user, additionalData);
+        if (changes.length > 0) {
+          const additionalData = {
+            changes: changes.join(", "),
+            originalData: {
+              [config.nameField]: originalDocument[config.nameField],
+              ...(originalDocument.image && {
+                image: originalDocument.image,
+              }),
+              ...(originalDocument.price && { price: originalDocument.price }),
+              ...(originalDocument.quantity && {
+                quantity: originalDocument.quantity,
+              }),
+              ...(originalDocument.status && { status: originalDocument.status }),
+              ...(originalDocument.deliveryStatus && {
+                deliveryStatus: originalDocument.deliveryStatus,
+              }),
+            },
+          };
+
+          await logMethod("update", updatedDocument, req.user, additionalData);
+        }
       }
+    }
+
+    // M5: When a Product's quantity is increased via generic update, log a
+    // Restocked activity so the dashboard shows inventory changes.
+    if (
+      Model.modelName === "Product" &&
+      req.user &&
+      originalDocument &&
+      originalDocument.quantity !== undefined &&
+      updatedDocument.quantity > originalDocument.quantity
+    ) {
+      ActivityLogger.checkAndLogStockEvents(
+        updatedDocument,
+        originalDocument.quantity,
+        updatedDocument.quantity,
+        req.user,
+        { source: "product_update" }
+      ).catch(() => {}); // fire-and-forget
     }
 
     res.status(200).json({ data: updatedDocument });

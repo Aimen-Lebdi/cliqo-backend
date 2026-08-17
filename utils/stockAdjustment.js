@@ -45,9 +45,14 @@ const toProductId = (item) =>
  * @param {Object} order   order document (reads order.cartItems original qty)
  * @param {Array}  changes [{ _id: productId, quantity: newQty, color? }]
  * @param {Object} Product Product model (mongoose) — injected for testability
+ * @param {Object} [opts={}]          Optional options
+ * @param {Object} [opts.user]        Actor — triggers LowStock / OutOfStock / Restocked logs
  * @returns {Promise<{ok:boolean, reason?:string}>}
  */
-const applyQuantityDeltas = async (order, changes, Product) => {
+const applyQuantityDeltas = async (order, changes, Product, opts = {}) => {
+  const { user } = opts;
+  // Lazy-require to keep the module testable when ActivityLogger is stubbed
+  const ActivityLogger = user ? require('../socket/activityLogger') : null;
   if (!Array.isArray(changes) || changes.length === 0) {
     return { ok: true };
   }
@@ -58,6 +63,8 @@ const applyQuantityDeltas = async (order, changes, Product) => {
   }));
 
   // 1) Validate availability for ALL positive deltas before mutating anything.
+  //    Cache product docs so we can read quantityBefore in step 2.
+  const productCache = new Map();
   for (const change of changes) {
     const current = currentItems.find(
       (i) => i.productId === String(change._id)
@@ -78,6 +85,19 @@ const applyQuantityDeltas = async (order, changes, Product) => {
         reason: `Insufficient stock for product ${change._id}: need ${delta} more, only ${product.quantity} available`,
       };
     }
+    productCache.set(String(change._id), product);
+  }
+
+  // Also pre-fetch restock products so we have the doc for logging.
+  for (const change of changes) {
+    if (productCache.has(String(change._id))) continue;
+    const current = currentItems.find(
+      (i) => i.productId === String(change._id)
+    );
+    const delta = computeDelta(current, change);
+    if (delta === 0) continue;
+    const product = await Product.findById(change._id);
+    if (product) productCache.set(String(change._id), product);
   }
 
   // 2) Apply the deltas (all validated → safe to apply).
@@ -87,6 +107,9 @@ const applyQuantityDeltas = async (order, changes, Product) => {
     );
     const delta = computeDelta(current, change);
     if (delta === 0) continue;
+
+    const cachedProduct = productCache.get(String(change._id));
+    const quantityBefore = cachedProduct?.quantity ?? null;
 
     if (delta > 0) {
       // Buyer added units: consume stock, bump sold.
@@ -109,6 +132,18 @@ const applyQuantityDeltas = async (order, changes, Product) => {
           },
         ]
       );
+    }
+
+    // M5: Fire-and-forget stock event log (LowStock / OutOfStock / Restocked).
+    if (ActivityLogger && quantityBefore !== null) {
+      const quantityAfter = quantityBefore - delta; // delta>0 means consumption
+      ActivityLogger.checkAndLogStockEvents(
+        cachedProduct,
+        quantityBefore,
+        quantityAfter,
+        user,
+        { source: 'order_edit' }
+      ).catch(() => {}); // never block the response
     }
   }
 

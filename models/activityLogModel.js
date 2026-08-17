@@ -13,6 +13,10 @@ const activityLogSchema = new mongoose.Schema(
         "user",
         "subcategory",
         "cart",
+        "payment",
+        "stock",
+        "auth",
+        "delivery",
       ],
     },
     activity: {
@@ -83,6 +87,18 @@ const activityLogSchema = new mongoose.Schema(
 activityLogSchema.index({ createdAt: -1 });
 activityLogSchema.index({ type: 1, createdAt: -1 });
 activityLogSchema.index({ "user.id": 1, createdAt: -1 });
+// M7: status filter index (e.g. ?status=failed) + compound index for
+// type+status dashboard queries
+activityLogSchema.index({ status: 1, createdAt: -1 });
+activityLogSchema.index({ type: 1, status: 1, createdAt: -1 });
+
+// M9: TTL index — MongoDB automatically purges documents older than 90 days.
+// This is a safety net alongside the manual `cleanupOldActivities` endpoint
+// (DELETE /api/activities/cleanup). The TTL runs every ~60 minutes via
+// MongoDB's background thread, so the actual deletion lag is up to 1 hour
+// past expiry. The 90-day value matches the `days` default in the cleanup
+// endpoint. If you change one, change the other.
+activityLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 
 const ActivityLogModel = mongoose.model("ActivityLog", activityLogSchema);
 

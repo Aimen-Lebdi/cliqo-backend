@@ -1,4 +1,5 @@
 const axios = require("axios");
+const mongoose = require("mongoose");
 const Order = require("../models/orderModel");
 const Product = require("../models/productModel");
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
@@ -9,6 +10,25 @@ const {
   refundCardOrder,
   closeCashPayment,
 } = require("../utils/orderRecovery");
+// M3: Delivery activity logging.
+const ActivityLogger = require("../socket/activityLogger");
+
+// M3: System-level actor for webhook-triggered delivery events (no authenticated
+// user is available when the delivery agency fires a webhook).
+const SYSTEM_USER = Object.freeze({
+  _id: new mongoose.Types.ObjectId("000000000000000000000000"),
+  name: "Delivery System",
+  role: "admin",
+});
+
+// M3: Maps delivery agency status strings to logDeliveryActivity action keys.
+const DELIVERY_STATUS_ACTION_MAP = Object.freeze({
+  in_transit: "inTransit",
+  out_for_delivery: "outForDelivery",
+  delivered: "delivered",
+  failed_delivery: "failed",
+  returned: "returned",
+});
 
 // Configuration
 // M3: Fixed broken default URL (was .../api/api/v1/)
@@ -169,7 +189,9 @@ class DeliveryService {
   }
 
   // Update order status from delivery agency webhook
-  static async updateOrderStatus(id, deliveryData) {
+  // M3: accepts optional `triggeredBy` — defaults to SYSTEM_USER for
+  // webhook-driven events where no authenticated user is available.
+  static async updateOrderStatus(id, deliveryData, triggeredBy = SYSTEM_USER) {
     try {
       const order = await Order.findById(id);
 
@@ -233,6 +255,22 @@ class DeliveryService {
         await restockOrderItems(order, Product);
         await refundCardOrder(order, stripe, "delivery_agency");
         closeCashPayment(order, "delivery_agency");
+      }
+
+      // M3: Log delivery activity for every meaningful status transition.
+      // `logDeliveryActivity` maps the action to the canonical activity literal
+      // (e.g. "Delivery In Transit") and appropriate status badge (pending /
+      // success / failed). Fire-and-forget so a logging failure never blocks
+      // the order update.
+      const deliveryAction = DELIVERY_STATUS_ACTION_MAP[mappedStatus];
+      if (deliveryAction) {
+        ActivityLogger.logDeliveryActivity(deliveryAction, order, triggeredBy, {
+          trackingNumber: order.trackingNumber || null,
+          reason: deliveryData.note || null,
+          agencyStatus: deliveryData.status,
+        }).catch((err) => {
+          console.error("M3: Failed to log delivery activity:", err.message);
+        });
       }
 
       // If delivered, mark accordingly

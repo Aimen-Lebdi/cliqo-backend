@@ -133,6 +133,9 @@ const banUser = expressAsyncHandler(async (req, res, next) => {
     // Email failure should not block the ban operation
   }
 
+  // M4: Log ban activity
+  await ActivityLogger.logUserActivity("ban", bannedUser, req.user);
+
   res.status(200).json({
     status: "Success",
     message: "User banned successfully",
@@ -169,6 +172,9 @@ const unbanUser = expressAsyncHandler(async (req, res, next) => {
   } catch (err) {
     // Email failure should not block the unban operation
   }
+
+  // M4: Log unban activity
+  await ActivityLogger.logUserActivity("unban", unbannedUser, req.user);
 
   res.status(200).json({
     status: "Success",
@@ -223,6 +229,11 @@ const banManyUsers = expressAsyncHandler(async (req, res, next) => {
       // Email failure should not block the ban operation
     }
 
+    // M4: Log individual ban activity in bulk operation
+    await ActivityLogger.logUserActivity("ban", bannedUser, req.user, {
+      bulkOperation: true,
+    });
+
     bannedUsers.push({ id: bannedUser._id, name: bannedUser.name, email: bannedUser.email });
   }
 
@@ -276,6 +287,11 @@ const unbanManyUsers = expressAsyncHandler(async (req, res, next) => {
     } catch (err) {
       // Email failure should not block the unban operation
     }
+
+    // M4: Log individual unban activity in bulk operation
+    await ActivityLogger.logUserActivity("unban", unbannedUser, req.user, {
+      bulkOperation: true,
+    });
 
     unbannedUsers.push({ id: unbannedUser._id, name: unbannedUser.name, email: unbannedUser.email });
   }
