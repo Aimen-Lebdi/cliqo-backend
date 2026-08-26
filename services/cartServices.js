@@ -25,6 +25,23 @@ exports.addProductToCart = asyncHandler(async (req, res, next) => {
     return next(new endpointError("Product not found", 404));
   }
 
+  // Optional quantity from the client (defaults to 1); must be a positive
+  // integer within available stock.
+  const parsedQuantity = Number.parseInt(req.body.quantity, 10);
+  const quantity =
+    Number.isFinite(parsedQuantity) && parsedQuantity > 0
+      ? Math.floor(parsedQuantity)
+      : 1;
+
+  if (quantity > product.quantity) {
+    return next(
+      new endpointError(
+        `Only ${product.quantity} unit(s) left in stock for this product`,
+        400
+      )
+    );
+  }
+
   // 1) Get Cart for logged user
   let cart = await Cart.findOne({ user: req.user._id });
 
@@ -32,7 +49,9 @@ exports.addProductToCart = asyncHandler(async (req, res, next) => {
     // create cart for logged user with product
     cart = await Cart.create({
       user: req.user._id,
-      cartItems: [{ product: productId, color, price: product.price }],
+      cartItems: [
+        { product: productId, color, price: product.price, quantity },
+      ],
     });
   } else {
     // Check if product exists in cart with same color
@@ -48,7 +67,15 @@ exports.addProductToCart = asyncHandler(async (req, res, next) => {
     if (productIndex > -1) {
       // Product exists in cart with same color, update quantity
       const cartItem = cart.cartItems[productIndex];
-      cartItem.quantity += 1;
+      if (cartItem.quantity + quantity > product.quantity) {
+        return next(
+          new endpointError(
+            `Only ${product.quantity} unit(s) left in stock for this product`,
+            400
+          )
+        );
+      }
+      cartItem.quantity += quantity;
       cart.cartItems[productIndex] = cartItem;
     } else {
       // Product not exist in cart or different color, push new item
