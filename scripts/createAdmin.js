@@ -17,7 +17,6 @@
  * Usage:
  *   npm run create-admin                                    # development
  *   NODE_ENV=production npm run create-admin                # production
- *   docker-compose exec backend npm run create-admin        # inside Docker
  */
 
 const path = require("path");

@@ -11,8 +11,6 @@ class SocketConfig {
       ? process.env.CORS_ORIGIN.split(",")
       : [
           "http://localhost:5173", // local Vite frontend
-          "http://localhost", // Docker frontend
-          "http://localhost:80", // Docker frontend explicit port
         ];
 
     this.io = new Server(server, {

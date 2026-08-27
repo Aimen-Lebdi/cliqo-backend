@@ -91,9 +91,7 @@ socketEmitter.setSocket(socketConfig);
 const allowedOrigins = process.env.CORS_ORIGIN 
   ? process.env.CORS_ORIGIN.split(',')
   : [
-      "http://localhost:5173", // local Vite frontend
-      "http://localhost",      // Docker frontend
-      "http://localhost:80",   // Docker frontend explicit port
+      "http://localhost:5173", // local Vite frontend 
     ];
 
 // CORS configuration

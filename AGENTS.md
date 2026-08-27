@@ -66,7 +66,6 @@ app.get("/example", expressAsyncHandler(async (req, res, next) => {
 - Only product search normalizes the keyword (`normalizeKeyword: true` in `productServices.js`); other models (brand/category/user) still search their raw `name` field as before — don't normalize the keyword for them or accented/Arabic matching regresses.
 - If the database is ever edited directly (non-Mongoose), re-sync by re-running the backfill: `node scripts/normalizeProductSearch.js` (or `NODE_ENV=production node scripts/normalizeProductSearch.js`).
 - Production: `NODE_ENV=production npm run create-admin` (Windows cmd: `set NODE_ENV=production && npm run create-admin`; PowerShell: `$env:NODE_ENV="production"; npm run create-admin`).
-- Docker: `docker-compose exec backend npm run create-admin`.
 - Fails if the email already exists; only warns (does not block) when other admins already exist.
 - Rotate/delete credentials after first login on a production box.
 

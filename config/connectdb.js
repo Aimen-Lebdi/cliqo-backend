@@ -3,7 +3,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const connectdb = () => {
-  // Use environment variable if available (Docker), otherwise fallback to local
+  // Use environment variable if available, otherwise fallback to local
   const mongoURI = process.env.MONGO_DB_URI || 'mongodb://localhost:27017/my-e-commerce';
   
   mongoose.connect(mongoURI).then(() => {
