@@ -117,7 +117,7 @@ const productSchema = new mongoose.Schema(
 
 
 
-productSchema.pre(/^find/, function (next) {
+productSchema.pre(/^find/, function () {
   this.populate({
     path: "category",
     select: "name _id",
@@ -130,14 +130,12 @@ productSchema.pre(/^find/, function (next) {
     path: "brand",
     select: "name _id",
   });
-  next();
 });
 
 // Populate normalized search fields whenever a product is saved
-productSchema.pre("save", function (next) {
+productSchema.pre("save", function () {
   this.searchName = normalizeSearchText(this.name);
   this.searchDescription = normalizeSearchText(this.description);
-  next();
 });
 
 // Middleware to update category product count when a product is saved

@@ -122,7 +122,7 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-orderSchema.pre(/^find/, function (next) {
+orderSchema.pre(/^find/, function () {
   this.populate({
     path: "user",
     select: "name image email phone",
@@ -130,8 +130,6 @@ orderSchema.pre(/^find/, function (next) {
     path: "cartItems.product",
     select: "name mainImage",
   });
-
-  next();
 });
 
 const orderModel = mongoose.model("Order", orderSchema);

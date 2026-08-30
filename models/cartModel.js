@@ -25,12 +25,11 @@ const cartSchema = new mongoose.Schema(
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-cartSchema.pre(/^find/, function (next) {
+cartSchema.pre(/^find/, function () {
   this.populate({
     path: "cartItems.product",
     select: "name _id mainImage brand",
   });
-  next();
 });
 
 const cartModel = mongoose.model("Cart", cartSchema);

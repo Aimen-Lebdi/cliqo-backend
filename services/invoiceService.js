@@ -2,7 +2,7 @@ const { PDFDocument, rgb, StandardFonts } = require("pdf-lib");
 
 // M5: Store info driven by environment variables (no more hardcoded placeholders)
 const STORE_INFO = {
-  name: process.env.STORE_NAME || "CliQo Store",
+  name: process.env.STORE_NAME || "Cliqo Store",
   address: process.env.STORE_ADDRESS || "123 Business Street",
   city: process.env.STORE_CITY || "Algiers, Algeria",
   phone: process.env.STORE_PHONE || "+213 000 000 000",
