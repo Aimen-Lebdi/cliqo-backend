@@ -176,6 +176,44 @@ async function main() {
     await mongoose.connect(mongoURI);
     console.log(`✅ MongoDB connected: ${mongoURI.split("@")[1] || mongoURI}`);
 
+    // ---------------------------------------------------------------
+    // Automatic (non-interactive) mode — driven by Render env vars.
+    //
+    // When CREATE_ADMIN_AUTOMATICALLY=true and the credential env vars are
+    // set, create the admin directly without any stdin prompts. Ideal for
+    // unattended provisioning on Render. Skips quietly if the admin already
+    // exists (idempotent).
+    // ---------------------------------------------------------------
+    if (
+      process.env.CREATE_ADMIN_AUTOMATICALLY === "true" &&
+      process.env.NEW_ADMIN_EMAIL &&
+      process.env.NEW_ADMIN_PASSWORD
+    ) {
+      const authedExisting = await User.findOne({
+        email: process.env.NEW_ADMIN_EMAIL,
+      });
+      if (authedExisting) {
+        console.log(
+          `⏭️ AUTO MODE: An account with email "${process.env.NEW_ADMIN_EMAIL}" already exists — skipping.`
+        );
+        return;
+      }
+      const adminDoc = await User.create({
+        name: process.env.NEW_ADMIN_NAME || "Administrator",
+        email: process.env.NEW_ADMIN_EMAIL,
+        password: process.env.NEW_ADMIN_PASSWORD,
+        role: "admin",
+        active: true,
+      });
+      console.log("\n✅ Admin account created automatically!");
+      console.log(`   👤 Name:  ${adminDoc.name}`);
+      console.log(`   📧 Email: ${adminDoc.email}`);
+      console.log(`   🔑 Role:  ${adminDoc.role}`);
+      await sendWelcomeEmail(adminDoc);
+      return;
+    }
+
+
     // Text fields first (line mode). Password/confirm use masked echo → last.
     rl = readline.createInterface({
       input: process.stdin,

@@ -7,6 +7,7 @@ const rateLimit = require("express-rate-limit");
 const hpp = require("hpp");
 const dotenv = require("dotenv");
 const http = require("http");
+const { spawn } = require("child_process");
 
 // ====================================
 // FIX: Load correct environment file
@@ -173,6 +174,46 @@ app.all("*splat", (req, res, next) => {
 app.use(globalErrorMiddleware);
 
 const PORT = process.env.PORT || 5000;
+
+// ================================================================
+// Auto-provisioning (no manual commands needed)
+//
+// When enabled via env vars, server.js spawns the admin-creation and
+// seed scripts as child processes on startup. They run in their own
+// processes (so their process.exit() calls can't kill the server) and
+// are fire-and-forget: the HTTP server always starts regardless.
+//
+//   AUTO_CREATE_ADMIN=true  -> runs scripts/createAdmin.js
+//   AUTO_SEED_DATA=true     -> runs scripts/seedData.js
+//
+// The scripts themselves stay safe & idempotent via their own guards:
+//   createAdmin.js skips if the email already exists (when
+//   CREATE_ADMIN_AUTOMATICALLY=true).
+//   seedData.js skips if data exists (SEED_SKIP_IF_NOTEMPTY=true) and
+//   only wipes when SEED_ALLOW_RESET=true.
+// ================================================================
+function runScriptIfEnabled(scriptPath, envFlag) {
+  if (process.env[envFlag] !== "true") return;
+  console.log(`🚀 Auto-running ${scriptPath} (${envFlag}=true)...`);
+  const child = spawn(process.execPath, [scriptPath], {
+    cwd: __dirname,
+    stdio: "inherit",
+    env: { ...process.env },
+  });
+  child.on("exit", (code) => {
+    if (code === 0) {
+      console.log(`✅ ${scriptPath} finished successfully`);
+    } else {
+      console.error(`⚠️ ${scriptPath} exited with code ${code}`);
+    }
+  });
+  child.on("error", (err) => {
+    console.error(`❌ Failed to start ${scriptPath}: ${err.message}`);
+  });
+}
+
+runScriptIfEnabled("scripts/createAdmin.js", "AUTO_CREATE_ADMIN");
+runScriptIfEnabled("scripts/seedData.js", "AUTO_SEED_DATA");
 
 // Use the HTTP server instead of app.listen
 server.listen(PORT, () => {

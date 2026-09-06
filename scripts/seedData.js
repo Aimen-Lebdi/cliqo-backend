@@ -52,13 +52,16 @@ const CACHE_FILE = path.join(__dirname, "seed-image-cache.json");
 const isDryRun =
   process.argv.includes("--dry-run") || process.env.SEED_DRY_RUN === "true";
 
-// Refuse to wipe a production database unless --force is passed.
-if (
-  process.env.NODE_ENV === "production" &&
-  !process.argv.includes("--force")
-) {
+// Refuse to wipe a production database unless --force is passed OR the
+// operator opts in via SEED_ALLOW_RESET=true (usable from Render env vars /
+// start command without needing argv).
+const allowForce =
+  process.argv.includes("--force") ||
+  process.env.SEED_ALLOW_RESET === "true";
+
+if (process.env.NODE_ENV === "production" && !allowForce) {
   console.error(
-    "Refusing to wipe the database in production. Re-run with --force to override."
+    "Refusing to wipe the database in production. Re-run with --force or set SEED_ALLOW_RESET=true to override."
   );
   process.exit(1);
 }
@@ -494,6 +497,20 @@ async function seed() {
 
   await mongoose.connect(mongoURI);
   console.log(`Connected to MongoDB (${mongoURI})`);
+
+  // Safety: if SEED_SKIP_IF_NOTEMPTY=true and the catalog already has data,
+  // abort BEFORE wiping anything. This makes the seed safe to auto-run on
+  // every deploy — it only populates an empty database.
+  if (process.env.SEED_SKIP_IF_NOTEMPTY === "true") {
+    const existingCount = await Product.countDocuments();
+    if (existingCount > 0) {
+      console.log(
+        `⏭️ SEED_SKIP_IF_NOTEMPTY=true and ${existingCount} products already exist — skipping seed.`
+      );
+      await mongoose.disconnect();
+      return;
+    }
+  }
 
   // Wipe in reverse dependency order so the product deleteMany hooks still
   // find their parent documents when recalculating counts.
