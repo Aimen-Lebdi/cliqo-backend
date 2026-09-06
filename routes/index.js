@@ -12,6 +12,11 @@ const orderRoutes = require("./orderRoutes");
 const activityRoutes = require("./activityRoutes");
 
 const mountRoutes = (app) => {
+  // Health check endpoint for Render deployment
+  app.get("/api/v1/health", (req, res) => {
+    res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
   app.use("/api/categories", categoryRoutes);
   app.use("/api/subcategories", subCategoryRoutes);
   app.use("/api/brands", brandRoutes);
